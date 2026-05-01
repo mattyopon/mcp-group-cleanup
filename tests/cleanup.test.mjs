@@ -16,11 +16,14 @@ function makeChromeMock(initialGroups, initialTabs, storageData = {}, opts = {})
   const created = [];
   const grouped = [];
   const groupUpdates = [];
+  const ungrouped = [];
   const failCreateUrls = new Set(opts.failCreateUrls || []);
   const failGroupCalls = opts.failGroupCalls || 0;
   const failGroupUpdates = opts.failGroupUpdates || 0;
+  const failUngroupCalls = opts.failUngroupCalls || 0;
   let groupCallsSoFar = 0;
   let groupUpdateCallsSoFar = 0;
+  let ungroupCallsSoFar = 0;
   return {
     storage: {
       local: {
@@ -73,6 +76,18 @@ function makeChromeMock(initialGroups, initialTabs, storageData = {}, opts = {})
           }
         }
       },
+      async ungroup(ids) {
+        ungroupCallsSoFar++;
+        if (ungroupCallsSoFar <= failUngroupCalls) {
+          throw new Error("simulated tabs.ungroup failure");
+        }
+        const arr = Array.isArray(ids) ? ids : [ids];
+        for (const id of arr) {
+          const t = initialTabs.find((x) => x.id === id);
+          if (t) t.groupId = -1;
+        }
+        ungrouped.push([...arr]);
+      },
       async create({ url, active, pinned, windowId }) {
         if (failCreateUrls.has(url)) {
           throw new Error("simulated tabs.create failure for " + url);
@@ -112,6 +127,7 @@ function makeChromeMock(initialGroups, initialTabs, storageData = {}, opts = {})
     _created: created,
     _grouped: grouped,
     _groupUpdates: groupUpdates,
+    _ungrouped: ungrouped,
     _storage: storageData,
     _tabs: initialTabs,
     _groups: initialGroups,
@@ -493,6 +509,63 @@ await t("purgeExpiredSnapshot no-snapshot when none stored", async () => {
   const r = await purgeExpiredSnapshot(c);
   assert.equal(r.purged, false);
   assert.equal(r.reason, "no-snapshot");
+});
+
+// === ungroup-before-remove ===
+await t("performCleanupCore default ungroupFirst=true calls tabs.ungroup before remove", async () => {
+  const groups = [{ id: 100, title: "Claude (MCP)", color: "orange" }];
+  const tabs = [
+    { id: 1, groupId: 100, url: "https://a.com" },
+    { id: 2, groupId: 100, url: "https://b.com" },
+  ];
+  const c = makeChromeMock(groups, tabs);
+  const r = await performCleanupCore(c, "Claude", "manual");
+  assert.equal(r.ungroupedGroups, 1);
+  assert.equal(c._ungrouped.length, 1);
+  assert.deepEqual([...c._ungrouped[0]].sort(), [1, 2]);
+  assert.equal(c._removed.length, 2);
+  assert.equal(c._storage.lastSnapshot.ungrouped, true);
+});
+
+await t("performCleanupCore ungroupFirst=false skips tabs.ungroup", async () => {
+  const groups = [{ id: 100, title: "Claude" }];
+  const tabs = [{ id: 1, groupId: 100, url: "https://a.com" }];
+  const c = makeChromeMock(groups, tabs);
+  const r = await performCleanupCore(c, "Claude", "manual", { ungroupFirst: false });
+  assert.equal(r.ungroupedGroups, 0);
+  assert.equal(c._ungrouped.length, 0);
+  assert.equal(c._removed.length, 1);
+  assert.equal(c._storage.lastSnapshot.ungrouped, false);
+});
+
+await t("performCleanupCore ungroup failure does NOT block remove (graceful)", async () => {
+  const groups = [{ id: 100, title: "Claude" }];
+  const tabs = [{ id: 1, groupId: 100, url: "https://a.com" }];
+  const c = makeChromeMock(groups, tabs, {}, { failUngroupCalls: 1 });
+  const r = await performCleanupCore(c, "Claude", "manual");
+  assert.equal(r.ungroupedGroups, 0, "ungroup count not incremented on failure");
+  assert.equal(c._removed.length, 1, "remove still runs");
+});
+
+await t("performCleanupCore ungroup not called for groups with 0 tabs", async () => {
+  const groups = [
+    { id: 100, title: "Claude" },
+    { id: 200, title: "Claude (empty)" },
+  ];
+  const tabs = [{ id: 1, groupId: 100, url: "https://a.com" }];
+  const c = makeChromeMock(groups, tabs);
+  await performCleanupCore(c, "Claude", "manual");
+  assert.equal(c._ungrouped.length, 1, "only the non-empty group is ungrouped");
+});
+
+await t("performCleanupCore handles api without ungroup method (older Chrome / partial mock)", async () => {
+  const groups = [{ id: 100, title: "Claude" }];
+  const tabs = [{ id: 1, groupId: 100, url: "https://a.com" }];
+  const c = makeChromeMock(groups, tabs);
+  delete c.tabs.ungroup;
+  const r = await performCleanupCore(c, "Claude", "manual");
+  assert.equal(r.ungroupedGroups, 0);
+  assert.equal(c._removed.length, 1);
 });
 
 // === legacy regression ===

@@ -10,18 +10,25 @@ const SWEEP_ALARM = "sweep";
 const PURGE_ALARM = "purge-snapshot";
 
 async function getState() {
-  const r = await chrome.storage.local.get(["filter", "autoEnabled"]);
+  const r = await chrome.storage.local.get([
+    "filter",
+    "autoEnabled",
+    "ungroupBeforeRemove",
+  ]);
   return {
     filter: effectiveFilter(r.filter),
     autoEnabled: r.autoEnabled !== false,
+    ungroupBeforeRemove: r.ungroupBeforeRemove !== false,
   };
 }
 
 async function autoCleanup() {
   try {
-    const { filter, autoEnabled } = await getState();
+    const { filter, autoEnabled, ungroupBeforeRemove } = await getState();
     if (!autoEnabled) return;
-    await performCleanupCore(chrome, filter, "auto");
+    await performCleanupCore(chrome, filter, "auto", {
+      ungroupFirst: ungroupBeforeRemove,
+    });
   } catch (e) {
     console.error(LOG_PREFIX, "autoCleanup failed:", e);
   }
@@ -42,15 +49,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     try {
       if (msg?.type === "manualCleanup") {
-        const { filter } = await getState();
+        const { filter, ungroupBeforeRemove } = await getState();
         const f = effectiveFilter(msg.filter ?? filter);
-        const result = await performCleanupCore(chrome, f, "manual");
+        const result = await performCleanupCore(chrome, f, "manual", {
+          ungroupFirst: ungroupBeforeRemove,
+        });
         sendResponse({ ok: true, ...result, usedFilter: f });
       } else if (msg?.type === "singleGroupCleanup") {
         if (typeof msg.groupId !== "number") {
           sendResponse({ ok: false, error: "groupId required" });
           return;
         }
+        const { ungroupBeforeRemove } = await getState();
         const all = await chrome.tabGroups.query({});
         const target = all.find((g) => g.id === msg.groupId);
         if (!target) {
@@ -58,9 +68,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         const tabs = await chrome.tabs.query({ groupId: msg.groupId });
+        const ids = tabs.map((t) => t.id);
         const snapshot = {
           ts: Date.now(),
           source: "single",
+          ungrouped: ungroupBeforeRemove,
           groups: [
             {
               title: target.title || "",
@@ -74,9 +86,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             },
           ],
         };
-        if (tabs.length > 0) {
+        if (ids.length > 0) {
           await chrome.storage.local.set({ lastSnapshot: snapshot });
-          await chrome.tabs.remove(tabs.map((t) => t.id));
+          if (ungroupBeforeRemove && chrome.tabs.ungroup) {
+            try {
+              await chrome.tabs.ungroup(ids);
+            } catch (e) {
+              console.error(LOG_PREFIX, "tabs.ungroup failed (single):", e);
+            }
+          }
+          await chrome.tabs.remove(ids);
         }
         sendResponse({ ok: true, groups: 1, tabs: tabs.length });
       } else if (msg?.type === "undo") {
@@ -104,6 +123,7 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
     await chrome.storage.local.set({
       filter: DEFAULT_FILTER,
       autoEnabled: true,
+      ungroupBeforeRemove: true,
     });
   }
   await ensureAlarms();

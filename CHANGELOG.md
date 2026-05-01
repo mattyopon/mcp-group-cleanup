@@ -3,6 +3,24 @@
 All notable changes to **MCP Group Cleanup** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.6] — 2026-05-01
+
+### Added
+- **`ungroupBeforeRemove` 設定 (デフォルト ON)** — クリーンアップ時に `chrome.tabs.remove` 前に `chrome.tabs.ungroup` を呼ぶことで、Chrome の "auto-save tab groups on close" 経路を回避する試験的オプション。`chrome.tabs.ungroup` は Chrome 88+ で「Removes one or more tabs from their respective groups. If any groups become empty, they are deleted.」と公式ドキュメントに明記されている。
+- popup に **「ブックマークバー保存を回避 (experimental)」トグル**追加。auto-toggle と同じ位置に。
+- `singleGroupCleanup` メッセージハンドラも同設定に従う。
+- snapshot に `ungrouped: bool` フィールド追加 (どちらの経路でクリーンアップされたかを記録、undo は影響なし)。
+
+### Tests (5 new, total 59 PASS)
+- ungroupFirst=true で `chrome.tabs.ungroup` が remove 前に呼ばれる
+- ungroupFirst=false で skip される
+- ungroup 失敗時も remove は実行される (graceful degradation)
+- 空グループに対しては ungroup を呼ばない
+- Chrome 87 以下 / 部分 mock で `tabs.ungroup` 不在でも crash しない (feature-detect)
+
+### Note (検証必要)
+本オプションが Chrome の auto-save tab groups の保存を本当に回避できるかは、Chrome のバージョン・設定次第。`chrome.tabs.ungroup` で group が dissolved されると `chrome.tabGroups.onRemoved` が "all tabs removed" 経路で発火し、ユーザー UI 上の "Close group" 経路を通らないため理論上は save されないはず。実機検証推奨。auto-save が ON でも既に saved されている過去のグループ (chromium issue 374592179) は本オプションでは消せない。
+
 ## [0.4.5] — 2026-05-01
 
 ### Removed

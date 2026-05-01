@@ -31,29 +31,44 @@ export async function snapshotMatchingTabs(api, targets) {
   return { snapshot: { ts: Date.now(), groups }, tabIdsByGroup };
 }
 
-export async function performCleanupCore(api, filter, source) {
+export async function performCleanupCore(api, filter, source, opts = {}) {
+  const ungroupFirst = opts.ungroupFirst !== false;
   const all = await api.tabGroups.query({});
   const targets = planCleanup(all, filter);
   const { snapshot, tabIdsByGroup } = await snapshotMatchingTabs(api, targets);
 
   let removedTabs = 0;
+  let ungroupedGroups = 0;
   for (const g of targets) {
     const ids = tabIdsByGroup.get(g.id);
-    if (ids && ids.length > 0) {
+    if (!ids || ids.length === 0) continue;
+    if (ungroupFirst && api.tabs.ungroup) {
       try {
-        await api.tabs.remove(ids);
-        removedTabs += ids.length;
+        await api.tabs.ungroup(ids);
+        ungroupedGroups++;
       } catch (e) {
-        console.error(LOG_PREFIX, "tabs.remove failed for group", g.id, e);
+        console.error(LOG_PREFIX, "tabs.ungroup failed for group", g.id, e);
       }
+    }
+    try {
+      await api.tabs.remove(ids);
+      removedTabs += ids.length;
+    } catch (e) {
+      console.error(LOG_PREFIX, "tabs.remove failed for group", g.id, e);
     }
   }
 
   if (snapshot.groups.length > 0) {
     snapshot.source = source;
+    snapshot.ungrouped = ungroupFirst;
     await api.storage.local.set({ lastSnapshot: snapshot });
   }
-  return { groups: targets.length, tabs: removedTabs, snapshot };
+  return {
+    groups: targets.length,
+    tabs: removedTabs,
+    ungroupedGroups,
+    snapshot,
+  };
 }
 
 export async function purgeExpiredSnapshot(api, ttlMs = UNDO_TTL_MS, now = Date.now()) {

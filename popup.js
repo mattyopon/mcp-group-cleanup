@@ -400,9 +400,14 @@ window.addEventListener("unhandledrejection", (ev) => {
   $("filter").maxLength = FILTER_MAX_LENGTH;
 
   try {
-    const stored = await chrome.storage.local.get(["filter", "autoEnabled"]);
+    const stored = await chrome.storage.local.get([
+      "filter",
+      "autoEnabled",
+      "ungroupBeforeRemove",
+    ]);
     $("filter").value = effectiveFilter(stored.filter).slice(0, FILTER_MAX_LENGTH);
     $("auto-toggle").checked = stored.autoEnabled !== false;
+    $("ungroup-toggle").checked = stored.ungroupBeforeRemove !== false;
   } catch (e) {
     showError("storage.get", e);
     $("filter").value = DEFAULT_FILTER;
@@ -437,6 +442,20 @@ window.addEventListener("unhandledrejection", (ev) => {
       );
     } catch (err) {
       showError("storage.set autoEnabled", err);
+    }
+  });
+
+  $("ungroup-toggle").addEventListener("change", async (e) => {
+    try {
+      await chrome.storage.local.set({ ungroupBeforeRemove: e.target.checked });
+      setMsg(
+        e.target.checked
+          ? "閉じる前に ungroup します (ブックマーク保存回避を試行)"
+          : "ungroup せず直接タブを閉じます",
+        "ok"
+      );
+    } catch (err) {
+      showError("storage.set ungroupBeforeRemove", err);
     }
   });
 

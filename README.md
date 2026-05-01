@@ -12,6 +12,7 @@ A tiny Chrome extension that auto-closes tab groups whose **title** contains a c
 - **Exclude pattern** — prefix with `!` (`Claude !Pinned` keeps groups containing "Pinned")
 - **60-second Undo** — recreates tabs and re-groups them with original title/color
 - **Single-group delete** — `×` button on any group in the list
+- **Bookmarks-bar save avoidance (experimental)** — toggle in popup; calls `chrome.tabs.ungroup` before `chrome.tabs.remove` so the group is dissolved (not "closed") and Chrome's auto-save-on-close path is bypassed
 - **Diagnostic dump** — built-in `ⓘ` button captures storage / API / errors as JSON
 - **Zero network** — all data stays in `chrome.storage.local`. No telemetry, no analytics
 
