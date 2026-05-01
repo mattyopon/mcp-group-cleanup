@@ -43,10 +43,10 @@ Recent Chrome versions save closed tab groups to the **Saved Tab Groups** bar by
 
 | Permission | Why |
 |---|---|
-| `tabs` | `chrome.tabs.query({groupId})` to enumerate tabs of a group; `chrome.tabs.remove` to close |
-| `tabGroups` | `chrome.tabGroups.query`/`update` to list and re-group during undo |
-| `alarms` | 30-minute periodic sweep |
-| `storage` | Persist filter / autoEnabled / undo snapshot |
+| `tabs` | Enumerate tabs by `groupId` (`chrome.tabs.query`), close them (`chrome.tabs.remove`), and recreate + regroup them on undo (`chrome.tabs.create`, `chrome.tabs.group`) |
+| `tabGroups` | List groups (`chrome.tabGroups.query`) and restore each group's title / color on undo (`chrome.tabGroups.update`) |
+| `alarms` | 30-minute auto-sweep + 1-minute snapshot-TTL purge |
+| `storage` | Persist filter, `autoEnabled` toggle, and ≤60 s undo snapshot in `chrome.storage.local` only |
 
 No `<all_urls>`, no `host_permissions`, no `activeTab`. Per Chrome Web Store [Minimum Permission Policy](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq).
 

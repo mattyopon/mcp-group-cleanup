@@ -1,5 +1,5 @@
-import { matchesFilter, planCleanup, DEFAULT_FILTER } from "./matcher.js";
-import { UNDO_TTL_MS } from "./cleanup-logic.js";
+import { matchesFilter, DEFAULT_FILTER } from "./matcher.js";
+import { UNDO_TTL_MS, FILTER_MAX_LENGTH, LOG_PREFIX } from "./constants.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,7 +27,7 @@ function escapeHtml(s) {
 function showError(label, e) {
   const text = `${label}: ${e?.message || e}`;
   errors.push({ label, message: e?.message || String(e), stack: e?.stack });
-  console.error("[mcp-cleanup]", label, e);
+  console.error(LOG_PREFIX, label, e);
   const banner = $("err-banner");
   banner.textContent = text;
   banner.classList.add("show");
@@ -107,7 +107,7 @@ async function render() {
           <span class="dot" style="background:${dot}"></span>
           <span class="title" title="${escapeHtml(r.g.title || "")}">${titleHtml}</span>
           <span class="tabs">${r.tabs.length}t</span>
-          <button class="del" data-gid="${r.g.id}" title="このグループのタブを閉じる">×</button>
+          <button class="del" data-gid="${r.g.id}" title="このグループのタブを閉じる (60秒以内なら元に戻せます)">×</button>
         </div>`;
       })
       .join("");
@@ -117,11 +117,13 @@ async function render() {
         e.stopPropagation();
         const gid = parseInt(btn.dataset.gid, 10);
         try {
-          const tabs = await safeTabsOf(gid);
-          if (tabs.length > 0) {
-            await chrome.tabs.remove(tabs.map((t) => t.id));
-          }
-          setMsg(`グループ #${gid} のタブ ${tabs.length} 件を閉じました`, "ok");
+          const resp = await chrome.runtime.sendMessage({
+            type: "singleGroupCleanup",
+            groupId: gid,
+          });
+          if (!resp?.ok) throw new Error(resp?.error || "singleGroupCleanup failed");
+          setMsg(`グループ #${gid} のタブ ${resp.tabs} 件を閉じました`, "ok");
+          startUndoCountdown();
         } catch (err) {
           showError(`タブ削除 (gid=${gid})`, err);
         }
@@ -139,7 +141,10 @@ async function render() {
     matchCount === 0 ? "マッチなし" : `マッチ ${matchCount} 件をクリーンアップ`;
 }
 
+let confirmInFlight = false;
 function showConfirm({ groupCount, tabCount }) {
+  if (confirmInFlight) return Promise.resolve(false);
+  confirmInFlight = true;
   return new Promise((resolve) => {
     const modal = $("confirm-modal");
     $("confirm-text").textContent =
@@ -147,15 +152,20 @@ function showConfirm({ groupCount, tabCount }) {
         UNDO_TTL_MS / 1000
       } 秒以内のみ可能です。`;
     modal.classList.add("show");
-    const yes = () => { cleanup(); resolve(true); };
-    const no = () => { cleanup(); resolve(false); };
-    function cleanup() {
+    let settled = false;
+    const finish = (decision) => {
+      if (settled) return;
+      settled = true;
       modal.classList.remove("show");
       $("confirm-yes").removeEventListener("click", yes);
       $("confirm-no").removeEventListener("click", no);
-    }
-    $("confirm-yes").addEventListener("click", yes, { once: true });
-    $("confirm-no").addEventListener("click", no, { once: true });
+      confirmInFlight = false;
+      resolve(decision);
+    };
+    const yes = () => finish(true);
+    const no = () => finish(false);
+    $("confirm-yes").addEventListener("click", yes);
+    $("confirm-no").addEventListener("click", no);
   });
 }
 
@@ -197,9 +207,15 @@ async function doUndo() {
     if (resp.reason === "no-snapshot") {
       setMsg("復元できる履歴がありません", "err");
     } else if (resp.reason === "expired") {
-      setMsg("有効期限切れ (60秒以内のみ復元可)", "err");
+      setMsg(`有効期限切れ (${UNDO_TTL_MS / 1000}秒以内のみ復元可)`, "err");
+    } else if (resp.reason === "partial") {
+      setMsg(
+        `部分復元 (${resp.restored} 件成功 / 一部失敗。再度元に戻すで残りを再試行可)`,
+        "err"
+      );
     } else {
-      setMsg(`${resp.restored} タブを復元しました`, "ok");
+      const skip = resp.skipped > 0 ? ` (${resp.skipped} 件は復元不可URLのためスキップ)` : "";
+      setMsg(`${resp.restored} タブを復元しました${skip}`, "ok");
     }
   } catch (e) {
     showError("undo", e);
@@ -250,19 +266,53 @@ function startUndoCountdown() {
   refreshUndoUI();
 }
 
+function redactUrl(url) {
+  if (typeof url !== "string" || !url) return "";
+  try {
+    return new URL(url).origin + "/…";
+  } catch {
+    return "(opaque)";
+  }
+}
+
+function redactSnapshot(snapshot) {
+  if (!snapshot) return null;
+  return {
+    ts: snapshot.ts,
+    source: snapshot.source,
+    groups: (snapshot.groups || []).map((g) => ({
+      title: g.title,
+      color: g.color,
+      windowId: g.windowId,
+      tabs: (g.tabs || []).map((t) => ({
+        urlOrigin: redactUrl(t.url),
+        titleLength: (t.title || "").length,
+        pinned: !!t.pinned,
+      })),
+    })),
+  };
+}
+
 async function buildDiagnostic() {
   const manifest = chrome.runtime.getManifest();
   const ua = navigator.userAgent;
   let storageState = null;
   try {
-    storageState = await chrome.storage.local.get(null);
+    const raw = await chrome.storage.local.get(null);
+    storageState = { ...raw };
+    if (storageState.lastSnapshot) {
+      storageState.lastSnapshot = redactSnapshot(storageState.lastSnapshot);
+    }
   } catch (e) {
     storageState = { _error: e.message };
   }
 
   let groupsRaw = null;
   try {
-    groupsRaw = await chrome.tabGroups.query({});
+    const raw = await chrome.tabGroups.query({});
+    groupsRaw = Array.isArray(raw)
+      ? raw.map((g) => ({ id: g.id, color: g.color, title: g.title ? "(redacted)" : "" }))
+      : { _error: "not array" };
   } catch (e) {
     groupsRaw = { _error: e.message };
   }
@@ -303,6 +353,7 @@ async function buildDiagnostic() {
     tabsSummary: tabsRaw,
     capturedErrors: errors,
     timestamp: new Date().toISOString(),
+    note: "URLs and titles are redacted to origin/length only.",
   };
   return JSON.stringify(dump, null, 2);
 }
@@ -325,7 +376,7 @@ async function copyDiagnostic() {
   const text = $("diag").textContent;
   try {
     await navigator.clipboard.writeText(text);
-    setMsg("診断情報をコピーしました", "ok");
+    setMsg("診断情報をコピーしました (URLは origin のみ)", "ok");
   } catch (e) {
     showError("clipboard.writeText", e);
   }
@@ -346,9 +397,11 @@ window.addEventListener("unhandledrejection", (ev) => {
     showError("getManifest", e);
   }
 
+  $("filter").maxLength = FILTER_MAX_LENGTH;
+
   try {
     const stored = await chrome.storage.local.get(["filter", "autoEnabled"]);
-    $("filter").value = stored.filter ?? DEFAULT_FILTER;
+    $("filter").value = (stored.filter ?? DEFAULT_FILTER).slice(0, FILTER_MAX_LENGTH);
     $("auto-toggle").checked = stored.autoEnabled !== false;
   } catch (e) {
     showError("storage.get", e);
@@ -388,7 +441,9 @@ window.addEventListener("unhandledrejection", (ev) => {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        await chrome.storage.local.set({ filter: $("filter").value.trim() });
+        await chrome.storage.local.set({
+          filter: $("filter").value.trim().slice(0, FILTER_MAX_LENGTH),
+        });
       } catch (e) {
         showError("storage.set", e);
       }

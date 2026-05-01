@@ -3,6 +3,42 @@
 All notable changes to **MCP Group Cleanup** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-05-01
+
+### Added
+- **`constants.js`** — single source of truth for `UNDO_TTL_MS`, `SWEEP_PERIOD_MIN`, `FILTER_MAX_LENGTH`, `LOG_PREFIX`. Removes drift risk between background and popup.
+- **Snapshot purge alarm** — a 1-minute `purge-snapshot` alarm now actively deletes expired `lastSnapshot` entries from `chrome.storage.local`, matching the privacy policy's "auto-deleted after ~60 s" claim.
+- **Single-group `×` button is now undo-eligible** — `popup.js` routes individual deletes through a new `singleGroupCleanup` message that records the same snapshot shape as a bulk cleanup.
+- **Diagnostic redaction** — the popup `ⓘ` JSON dump now exposes only `URL.origin + "/…"` instead of full URLs and replaces `tabGroupsRaw[].title` with `(redacted)`. Prevents leakage if the user pastes the diag into a public tracker.
+- **Hardened `isRestorableUrl`** — switched from a denylist (`chrome://`, `chrome-extension://`, `about:`, `edge://`, `brave://`) to an explicit **allowlist** of `http://`, `https://`, `ftp://`, `ftps://`. `javascript:`, `data:`, and `file://` are now actively rejected for defense-in-depth even though Chromium's tab API normally already blocks them.
+- **`FILTER_MAX_LENGTH = 200`** enforced in `manifest.json` `<input>`, on storage write, and on read.
+- **TTL boundary tests** — `now-ts === ttlMs` is allowed; `now-ts === ttlMs+1` is expired. `purgeExpiredSnapshot` is unit tested.
+- **windowId restoration** — `chrome.tabs.create` and `chrome.tabs.group` now receive the original group's `windowId`, with a single fallback to the focused window if the original is gone. Prevents undo from re-creating tabs in the wrong Chrome window.
+- **Partial-failure resilience** — `restoreFromSnapshot` no longer consumes `lastSnapshot` if any `tabs.create` / `tabs.group` / `tabGroups.update` fails; it returns `reason: "partial"` so the user can hit Undo again.
+- **All-skipped group handling** — a group whose tabs are all chrome:// (or other unrestorable schemes) no longer triggers a `chrome.tabs.group({tabIds: []})` call, eliminating a latent service-worker exception.
+- **Idempotent alarm registration** — `chrome.alarms.create` is gated by `chrome.alarms.get` so service-worker re-spawns don't perpetually reset the 30-minute sweep timer.
+
+### Changed
+- **`bg.js` log prefix** unified to `[mcp-cleanup]` (was a mix of `[claude-mcp-cleanup]` and `[mcp-cleanup]`).
+- **Snapshot tab IDs are captured at snapshot time and reused for the remove call** — eliminates the previous double-`chrome.tabs.query` race in `performCleanupCore` where a tab opened mid-cleanup could be closed without being recorded for undo.
+- **`PRIVACY.md`** now precisely documents (a) `windowId` is stored in the snapshot, (b) the snapshot is purged by a 1-minute alarm rather than only on popup-open, (c) diagnostic redaction policy.
+- **`store-listing.md`** Privacy Practices section now ticks **Web history** in addition to Website content, matching the URL+title+timestamp shape of `lastSnapshot`. Permission justifications updated to mention `tabs.create` / `tabs.group` for undo.
+- **`build.sh`** now (a) extracts the version with a `node → python3 → grep` fallback chain, (b) emits a deterministic, lexicographically-sorted zip with fixed (1980-01-01) timestamps via `zipfile.ZipInfo`, eliminating the cross-machine binary drift.
+
+### Verified
+- 49/49 tests pass (`matcher.test.mjs` 25, `cleanup.test.mjs` 24).
+- `bash build.sh` produces `dist/mcp-group-cleanup-v0.4.1.zip` from the staged file set listed in `build.sh`.
+
+### Test additions (new in 0.4.1)
+- `isRestorableUrl` allowlist behavior across http/https/ftp/ftps and rejection of chrome/about/edge/brave/extension/javascript/data/file/empty/non-string.
+- `restoreFromSnapshot` TTL boundary at exactly `ttlMs` and `ttlMs + 1`.
+- `restoreFromSnapshot` recreates tabs **with `windowId`** and the regrouped tabs inherit the same `windowId`.
+- `restoreFromSnapshot` keeps `lastSnapshot` after a `tabs.create` failure (retryable partial state).
+- `restoreFromSnapshot` keeps `lastSnapshot` after a `tabs.group` failure.
+- `restoreFromSnapshot` handles a group whose tabs are all chrome:// without crashing.
+- `purgeExpiredSnapshot` removes expired, keeps fresh, no-ops when none stored.
+- `performCleanupCore` snapshot tab IDs match the removed-tab IDs (race regression).
+
 ## [0.4.0] — 2026-05-01
 
 ### Added
