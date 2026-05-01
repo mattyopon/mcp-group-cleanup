@@ -1,0 +1,401 @@
+import { matchesFilter, planCleanup, DEFAULT_FILTER } from "./matcher.js";
+import { UNDO_TTL_MS } from "./cleanup-logic.js";
+
+const $ = (id) => document.getElementById(id);
+
+const COLOR_HEX = {
+  grey: "#9aa0a6",
+  blue: "#1a73e8",
+  red: "#d93025",
+  yellow: "#fbbc04",
+  green: "#188038",
+  pink: "#d01884",
+  purple: "#9334e6",
+  cyan: "#007b83",
+  orange: "#fa7b17",
+};
+
+const errors = [];
+let undoTimer = null;
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = String(s);
+  return div.innerHTML;
+}
+
+function showError(label, e) {
+  const text = `${label}: ${e?.message || e}`;
+  errors.push({ label, message: e?.message || String(e), stack: e?.stack });
+  console.error("[mcp-cleanup]", label, e);
+  const banner = $("err-banner");
+  banner.textContent = text;
+  banner.classList.add("show");
+}
+
+function setMsg(text, kind = "") {
+  const el = $("msg");
+  el.textContent = text;
+  el.className = "msg" + (kind ? " " + kind : "");
+}
+
+function setStats(text) {
+  $("stats").textContent = text;
+}
+
+async function safeQueryGroups() {
+  try {
+    if (!chrome?.tabGroups?.query) {
+      throw new Error(
+        "chrome.tabGroups API 不在 (Chrome 89+ / 'tabGroups' 権限要)"
+      );
+    }
+    const result = await chrome.tabGroups.query({});
+    if (!Array.isArray(result)) {
+      throw new Error("tabGroups.query が配列を返さず: " + typeof result);
+    }
+    return result;
+  } catch (e) {
+    showError("tabGroups.query 失敗", e);
+    return [];
+  }
+}
+
+async function safeTabsOf(groupId) {
+  try {
+    return await chrome.tabs.query({ groupId });
+  } catch (e) {
+    showError(`tabs.query(groupId=${groupId}) 失敗`, e);
+    return [];
+  }
+}
+
+async function render() {
+  const filter = $("filter").value.trim();
+  $("list").innerHTML = '<div class="loading">取得中…</div>';
+
+  const groups = await safeQueryGroups();
+
+  const enriched = [];
+  for (const g of groups) {
+    const tabs = await safeTabsOf(g.id);
+    enriched.push({ g, tabs, matches: matchesFilter(g.title, filter) });
+  }
+  enriched.sort((a, b) => Number(b.matches) - Number(a.matches));
+
+  const matchCount = enriched.filter((r) => r.matches).length;
+  const totalTabs = enriched.reduce((s, r) => s + r.tabs.length, 0);
+  const matchTabCount = enriched
+    .filter((r) => r.matches)
+    .reduce((s, r) => s + r.tabs.length, 0);
+
+  setStats(
+    `グループ ${groups.length} / タブ ${totalTabs} / マッチ ${matchCount}`
+  );
+
+  if (enriched.length === 0) {
+    $("list").innerHTML =
+      '<div class="empty">タブグループが0件です<br>(タブをグループ化していないか、API取得失敗)</div>';
+  } else {
+    $("list").innerHTML = enriched
+      .map((r) => {
+        const titleHtml = r.g.title
+          ? escapeHtml(r.g.title)
+          : '<span class="untitled">(無題)</span>';
+        const dot = COLOR_HEX[r.g.color] || "#999";
+        return `<div class="group ${r.matches ? "match" : ""}" data-gid="${r.g.id}">
+          <span class="dot" style="background:${dot}"></span>
+          <span class="title" title="${escapeHtml(r.g.title || "")}">${titleHtml}</span>
+          <span class="tabs">${r.tabs.length}t</span>
+          <button class="del" data-gid="${r.g.id}" title="このグループのタブを閉じる">×</button>
+        </div>`;
+      })
+      .join("");
+
+    document.querySelectorAll(".del").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const gid = parseInt(btn.dataset.gid, 10);
+        try {
+          const tabs = await safeTabsOf(gid);
+          if (tabs.length > 0) {
+            await chrome.tabs.remove(tabs.map((t) => t.id));
+          }
+          setMsg(`グループ #${gid} のタブ ${tabs.length} 件を閉じました`, "ok");
+        } catch (err) {
+          showError(`タブ削除 (gid=${gid})`, err);
+        }
+        await render();
+        await refreshUndoUI();
+      });
+    });
+  }
+
+  const cleanupBtn = $("cleanup");
+  cleanupBtn.disabled = matchCount === 0;
+  cleanupBtn.dataset.matchCount = String(matchCount);
+  cleanupBtn.dataset.matchTabs = String(matchTabCount);
+  cleanupBtn.textContent =
+    matchCount === 0 ? "マッチなし" : `マッチ ${matchCount} 件をクリーンアップ`;
+}
+
+function showConfirm({ groupCount, tabCount }) {
+  return new Promise((resolve) => {
+    const modal = $("confirm-modal");
+    $("confirm-text").textContent =
+      `${groupCount} グループ / 計 ${tabCount} タブを閉じます。元に戻すは ${
+        UNDO_TTL_MS / 1000
+      } 秒以内のみ可能です。`;
+    modal.classList.add("show");
+    const yes = () => { cleanup(); resolve(true); };
+    const no = () => { cleanup(); resolve(false); };
+    function cleanup() {
+      modal.classList.remove("show");
+      $("confirm-yes").removeEventListener("click", yes);
+      $("confirm-no").removeEventListener("click", no);
+    }
+    $("confirm-yes").addEventListener("click", yes, { once: true });
+    $("confirm-no").addEventListener("click", no, { once: true });
+  });
+}
+
+async function bulkCleanup() {
+  const filter = $("filter").value.trim();
+  if (!filter) {
+    setMsg("フィルタが空です", "err");
+    return;
+  }
+  const cleanupBtn = $("cleanup");
+  const groupCount = parseInt(cleanupBtn.dataset.matchCount || "0", 10);
+  const tabCount = parseInt(cleanupBtn.dataset.matchTabs || "0", 10);
+  if (groupCount === 0) return;
+
+  const ok = await showConfirm({ groupCount, tabCount });
+  if (!ok) return;
+
+  cleanupBtn.disabled = true;
+  setMsg("クリーンアップ中…");
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "manualCleanup", filter });
+    if (!resp?.ok) throw new Error(resp?.error || "manualCleanup failed");
+    await chrome.storage.local.set({ filter });
+    setMsg(`${resp.groups} group / ${resp.tabs} tabs を閉じました`, "ok");
+    startUndoCountdown();
+  } catch (e) {
+    showError("bulkCleanup", e);
+  } finally {
+    await render();
+    await refreshUndoUI();
+  }
+}
+
+async function doUndo() {
+  setMsg("復元中…");
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "undo" });
+    if (!resp?.ok) throw new Error(resp?.error || "undo failed");
+    if (resp.reason === "no-snapshot") {
+      setMsg("復元できる履歴がありません", "err");
+    } else if (resp.reason === "expired") {
+      setMsg("有効期限切れ (60秒以内のみ復元可)", "err");
+    } else {
+      setMsg(`${resp.restored} タブを復元しました`, "ok");
+    }
+  } catch (e) {
+    showError("undo", e);
+  } finally {
+    await render();
+    await refreshUndoUI();
+  }
+}
+
+async function refreshUndoUI() {
+  if (undoTimer) {
+    clearInterval(undoTimer);
+    undoTimer = null;
+  }
+  const { lastSnapshot } = await chrome.storage.local.get("lastSnapshot");
+  const row = $("undo-row");
+  if (!lastSnapshot) {
+    row.classList.remove("show");
+    return;
+  }
+  const elapsed = Date.now() - lastSnapshot.ts;
+  if (elapsed > UNDO_TTL_MS) {
+    row.classList.remove("show");
+    await chrome.storage.local.remove("lastSnapshot");
+    return;
+  }
+  row.classList.add("show");
+  const totalTabs = lastSnapshot.groups.reduce(
+    (s, g) => s + g.tabs.length,
+    0
+  );
+  const updateLabel = () => {
+    const remain = Math.max(0, UNDO_TTL_MS - (Date.now() - lastSnapshot.ts));
+    const sec = Math.ceil(remain / 1000);
+    if (remain <= 0) {
+      row.classList.remove("show");
+      clearInterval(undoTimer);
+      undoTimer = null;
+      return;
+    }
+    $("undo-label").textContent = `${totalTabs} タブを復元 (残り ${sec}秒)`;
+  };
+  updateLabel();
+  undoTimer = setInterval(updateLabel, 500);
+}
+
+function startUndoCountdown() {
+  refreshUndoUI();
+}
+
+async function buildDiagnostic() {
+  const manifest = chrome.runtime.getManifest();
+  const ua = navigator.userAgent;
+  let storageState = null;
+  try {
+    storageState = await chrome.storage.local.get(null);
+  } catch (e) {
+    storageState = { _error: e.message };
+  }
+
+  let groupsRaw = null;
+  try {
+    groupsRaw = await chrome.tabGroups.query({});
+  } catch (e) {
+    groupsRaw = { _error: e.message };
+  }
+
+  let tabsRaw = null;
+  try {
+    const allTabs = await chrome.tabs.query({});
+    tabsRaw = {
+      total: allTabs.length,
+      grouped: allTabs.filter((t) => t.groupId !== -1).length,
+    };
+  } catch (e) {
+    tabsRaw = { _error: e.message };
+  }
+
+  const apis = {
+    "chrome.tabGroups": typeof chrome.tabGroups,
+    "chrome.tabGroups.query": typeof chrome.tabGroups?.query,
+    "chrome.tabs": typeof chrome.tabs,
+    "chrome.tabs.query": typeof chrome.tabs?.query,
+    "chrome.tabs.remove": typeof chrome.tabs?.remove,
+    "chrome.tabs.create": typeof chrome.tabs?.create,
+    "chrome.tabs.group": typeof chrome.tabs?.group,
+    "chrome.storage.local": typeof chrome.storage?.local,
+    "chrome.runtime.sendMessage": typeof chrome.runtime?.sendMessage,
+  };
+
+  const dump = {
+    extension: {
+      name: manifest.name,
+      version: manifest.version,
+      permissions: manifest.permissions,
+    },
+    userAgent: ua,
+    apis,
+    storage: storageState,
+    tabGroupsRaw: groupsRaw,
+    tabsSummary: tabsRaw,
+    capturedErrors: errors,
+    timestamp: new Date().toISOString(),
+  };
+  return JSON.stringify(dump, null, 2);
+}
+
+async function showDiagnostic() {
+  const panel = $("diag");
+  const actions = $("diag-actions");
+  panel.classList.add("show");
+  actions.classList.add("show");
+  panel.textContent = "収集中…";
+  panel.textContent = await buildDiagnostic();
+}
+
+function hideDiagnostic() {
+  $("diag").classList.remove("show");
+  $("diag-actions").classList.remove("show");
+}
+
+async function copyDiagnostic() {
+  const text = $("diag").textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    setMsg("診断情報をコピーしました", "ok");
+  } catch (e) {
+    showError("clipboard.writeText", e);
+  }
+}
+
+window.addEventListener("error", (ev) => {
+  showError("window.error", ev.error || ev.message);
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  showError("unhandledrejection", ev.reason);
+});
+
+(async () => {
+  try {
+    const m = chrome.runtime.getManifest();
+    $("ver").textContent = "v" + m.version;
+  } catch (e) {
+    showError("getManifest", e);
+  }
+
+  try {
+    const stored = await chrome.storage.local.get(["filter", "autoEnabled"]);
+    $("filter").value = stored.filter ?? DEFAULT_FILTER;
+    $("auto-toggle").checked = stored.autoEnabled !== false;
+  } catch (e) {
+    showError("storage.get", e);
+    $("filter").value = DEFAULT_FILTER;
+    $("auto-toggle").checked = true;
+  }
+
+  $("cleanup").addEventListener("click", bulkCleanup);
+  $("undo-btn").addEventListener("click", doUndo);
+  $("refresh").addEventListener("click", async () => {
+    setMsg("");
+    $("err-banner").classList.remove("show");
+    errors.length = 0;
+    await render();
+    await refreshUndoUI();
+  });
+  $("info-btn").addEventListener("click", showDiagnostic);
+  $("diag-copy").addEventListener("click", copyDiagnostic);
+  $("diag-close").addEventListener("click", hideDiagnostic);
+
+  $("auto-toggle").addEventListener("change", async (e) => {
+    try {
+      await chrome.storage.local.set({ autoEnabled: e.target.checked });
+      setMsg(
+        e.target.checked
+          ? "自動クリーンアップを有効化"
+          : "自動クリーンアップを無効化",
+        "ok"
+      );
+    } catch (err) {
+      showError("storage.set autoEnabled", err);
+    }
+  });
+
+  let saveTimer = null;
+  $("filter").addEventListener("input", () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      try {
+        await chrome.storage.local.set({ filter: $("filter").value.trim() });
+      } catch (e) {
+        showError("storage.set", e);
+      }
+    }, 300);
+    render();
+  });
+
+  await render();
+  await refreshUndoUI();
+})().catch((e) => showError("popup init", e));
