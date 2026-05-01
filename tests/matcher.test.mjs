@@ -3,6 +3,7 @@ import {
   matchesFilter,
   planCleanup,
   parseFilter,
+  effectiveFilter,
   DEFAULT_FILTER,
 } from "../matcher.js";
 
