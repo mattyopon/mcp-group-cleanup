@@ -3,6 +3,19 @@
 All notable changes to **MCP Group Cleanup** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.4] — 2026-05-01
+
+### Added (verification-only)
+- **`bookmarks` permission** added to `manifest.json` *for the diagnostic verification phase only*. Goal: determine whether Chrome's "Saved Tab Groups" (pinned to bookmarks bar) appear in `chrome.bookmarks.getTree()`.
+- **`bookmarksRaw` in the `ⓘ` diagnostic dump** — full tree with bookmark URLs redacted to `origin/…`, titles preserved (we need titles to identify saved tab groups). Folder/bookmark distinction recorded.
+- **`tabGroupsRaw` titles unredacted** in diagnostic — required to correlate live groups vs bookmark entries.
+
+### Why
+Per [chromium-extensions thread, Oct 2024](https://groups.google.com/a/chromium.org/g/chromium-extensions/c/rypFJOkAlz8), the Chrome team confirmed there is **no public API for Saved Tab Groups**. Whether they leak through `chrome.bookmarks` is unknown without empirical testing on a current Chrome build, hence this verification-only release.
+
+### Note
+If `chrome.bookmarks.getTree()` does not surface saved tab groups, the `bookmarks` permission will be removed in v0.4.5 and the feature will be marked unsupported until Chrome ships a public API.
+
 ## [0.4.3] — 2026-05-01
 
 ### Fixed
