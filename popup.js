@@ -420,6 +420,10 @@ window.addEventListener("unhandledrejection", (ev) => {
   });
   $("info-btn").addEventListener("click", showDiagnostic);
   $("diag-copy").addEventListener("click", copyDiagnostic);
+  $("diag-reload").addEventListener("click", () => {
+    setMsg("拡張をリロード中…", "ok");
+    chrome.runtime.reload();
+  });
   $("diag-close").addEventListener("click", hideDiagnostic);
 
   $("auto-toggle").addEventListener("change", async (e) => {

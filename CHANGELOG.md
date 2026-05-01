@@ -3,6 +3,11 @@
 All notable changes to **MCP Group Cleanup** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] — 2026-05-01
+
+### Added
+- **「拡張をリロード」ボタン**を診断パネル (`ⓘ`) 内に追加。`chrome.runtime.reload()` を直接呼ぶので `chrome://extensions/` に遷移せずに popup 上から拡張を再読み込みできる。誤クリック防止のため通常導線 (refresh/cleanup) からは独立し、`ⓘ` を開いた時のみ表示される。
+
 ## [0.4.1] — 2026-05-01
 
 ### Added
