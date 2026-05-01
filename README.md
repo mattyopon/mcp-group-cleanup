@@ -37,7 +37,7 @@ A tiny Chrome extension that auto-closes tab groups whose **title** contains a c
 
 ## Saved Tab Groups note
 
-Recent Chrome versions save closed tab groups to the **Saved Tab Groups** bar by default. This extension closes the group's tabs (which automatically closes the group itself per the [`chrome.tabGroups.onRemoved`](https://developer.chrome.com/docs/extensions/reference/api/tabGroups) spec) but it does **not** delete saved entries. To purge them: right-click a saved group on the bookmarks bar → **Delete group**.
+Recent Chrome versions save closed tab groups to the bookmarks bar (the "Saved Tab Groups" feature). **This extension cannot clean those up — Chrome does not currently expose any extension API for saved tab groups.** Empirically verified on Chrome 147 in v0.4.4: `chrome.bookmarks.getTree()` returns the bookmarks bar with `children: []` even when saved tab groups are pinned to it; they live in a separate internal sync store. See [chromium issue 374592179](https://issues.chromium.org/issues/374592179) and the [chromium-extensions ML thread](https://groups.google.com/a/chromium.org/g/chromium-extensions/c/rypFJOkAlz8). To purge a saved tab group manually: right-click it on the bookmarks bar → **グループを削除 / Delete group**.
 
 ## Permissions
 

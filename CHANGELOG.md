@@ -3,6 +3,18 @@
 All notable changes to **MCP Group Cleanup** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] — 2026-05-01
+
+### Removed
+- **`bookmarks` permission reverted.** v0.4.4 added it to empirically test whether Chrome's "Saved Tab Groups" leak through `chrome.bookmarks.getTree()`. They do not. Verified on Chrome 147: the bookmarks-bar folder has `children: []` even when saved tab groups are visibly pinned to it. Saved Tab Groups live in a separate internal sync store inaccessible to extension APIs.
+- **`bookmarksRaw` removed from the diagnostic dump.** `summarizeBookmarkNode` helper deleted. `chrome.bookmarks` typeof checks dropped from the `apis` block.
+
+### Documentation
+- README "Saved Tab Groups note" rewritten to state the feature is **unsupported** with explicit empirical evidence and links to chromium issue 374592179 and the chromium-extensions ML thread.
+
+### Result
+- Permission set is back to the minimum: `tabs`, `tabGroups`, `alarms`, `storage`.
+
 ## [0.4.4] — 2026-05-01
 
 ### Added (verification-only)

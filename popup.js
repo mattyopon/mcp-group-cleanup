@@ -293,26 +293,6 @@ function redactSnapshot(snapshot) {
   };
 }
 
-function summarizeBookmarkNode(node) {
-  const out = {
-    id: node.id,
-    parentId: node.parentId,
-    title: node.title || "",
-    type: node.url ? "bookmark" : "folder",
-  };
-  if (node.url) {
-    out.urlOrigin = redactUrl(node.url);
-  }
-  for (const k of Object.keys(node)) {
-    if (k === "id" || k === "parentId" || k === "title" || k === "url" || k === "children") continue;
-    out["_" + k] = node[k];
-  }
-  if (Array.isArray(node.children)) {
-    out.children = node.children.map(summarizeBookmarkNode);
-  }
-  return out;
-}
-
 async function buildDiagnostic() {
   const manifest = chrome.runtime.getManifest();
   const ua = navigator.userAgent;
@@ -331,7 +311,7 @@ async function buildDiagnostic() {
   try {
     const raw = await chrome.tabGroups.query({});
     groupsRaw = Array.isArray(raw)
-      ? raw.map((g) => ({ id: g.id, color: g.color, title: g.title || "(empty)" }))
+      ? raw.map((g) => ({ id: g.id, color: g.color, title: g.title ? "(redacted)" : "" }))
       : { _error: "not array" };
   } catch (e) {
     groupsRaw = { _error: e.message };
@@ -348,18 +328,6 @@ async function buildDiagnostic() {
     tabsRaw = { _error: e.message };
   }
 
-  let bookmarksRaw = null;
-  try {
-    if (chrome?.bookmarks?.getTree) {
-      const tree = await chrome.bookmarks.getTree();
-      bookmarksRaw = tree.map(summarizeBookmarkNode);
-    } else {
-      bookmarksRaw = { _error: "chrome.bookmarks API not available" };
-    }
-  } catch (e) {
-    bookmarksRaw = { _error: e.message };
-  }
-
   const apis = {
     "chrome.tabGroups": typeof chrome.tabGroups,
     "chrome.tabGroups.query": typeof chrome.tabGroups?.query,
@@ -370,8 +338,6 @@ async function buildDiagnostic() {
     "chrome.tabs.group": typeof chrome.tabs?.group,
     "chrome.storage.local": typeof chrome.storage?.local,
     "chrome.runtime.sendMessage": typeof chrome.runtime?.sendMessage,
-    "chrome.bookmarks": typeof chrome.bookmarks,
-    "chrome.bookmarks.getTree": typeof chrome.bookmarks?.getTree,
   };
 
   const dump = {
@@ -385,10 +351,9 @@ async function buildDiagnostic() {
     storage: storageState,
     tabGroupsRaw: groupsRaw,
     tabsSummary: tabsRaw,
-    bookmarksRaw,
     capturedErrors: errors,
     timestamp: new Date().toISOString(),
-    note: "Bookmark URLs are redacted to origin only. Titles are kept verbatim because we are looking for saved tab group nodes.",
+    note: "URLs and titles are redacted to origin / length only.",
   };
   return JSON.stringify(dump, null, 2);
 }
