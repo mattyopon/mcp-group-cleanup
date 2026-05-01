@@ -1,4 +1,4 @@
-import { DEFAULT_FILTER } from "./matcher.js";
+import { DEFAULT_FILTER, effectiveFilter } from "./matcher.js";
 import {
   performCleanupCore,
   restoreFromSnapshot,
@@ -12,7 +12,7 @@ const PURGE_ALARM = "purge-snapshot";
 async function getState() {
   const r = await chrome.storage.local.get(["filter", "autoEnabled"]);
   return {
-    filter: r.filter,
+    filter: effectiveFilter(r.filter),
     autoEnabled: r.autoEnabled !== false,
   };
 }
@@ -21,7 +21,6 @@ async function autoCleanup() {
   try {
     const { filter, autoEnabled } = await getState();
     if (!autoEnabled) return;
-    if (!filter) return;
     await performCleanupCore(chrome, filter, "auto");
   } catch (e) {
     console.error(LOG_PREFIX, "autoCleanup failed:", e);
@@ -44,13 +43,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     try {
       if (msg?.type === "manualCleanup") {
         const { filter } = await getState();
-        const f = msg.filter ?? filter;
-        if (!f) {
-          sendResponse({ ok: false, error: "filter is empty" });
-          return;
-        }
+        const f = effectiveFilter(msg.filter ?? filter);
         const result = await performCleanupCore(chrome, f, "manual");
-        sendResponse({ ok: true, ...result });
+        sendResponse({ ok: true, ...result, usedFilter: f });
       } else if (msg?.type === "singleGroupCleanup") {
         if (typeof msg.groupId !== "number") {
           sendResponse({ ok: false, error: "groupId required" });

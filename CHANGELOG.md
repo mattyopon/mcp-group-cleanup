@@ -3,6 +3,16 @@
 All notable changes to **MCP Group Cleanup** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] — 2026-05-01
+
+### Fixed
+- **空フィルタで何もマッチしない問題** — `effectiveFilter()` ヘルパを追加し、ストレージ値が空文字列・空白のみ・null/undefined/非文字列のいずれでも DEFAULT_FILTER (`"Claude"`) にフォールバックさせる。`onInstalled.reason === "install"` でしかデフォルトを書かない仕様の隙間 (v0.3.1 → v0.4.x のアップデートや手動で空にした場合) を塞いだ。
+- popup の bulk cleanup 時、フィルタ欄が空ならその場で DEFAULT_FILTER を入力欄にも書き戻す。
+- bg autoCleanup と manualCleanup ハンドラも `effectiveFilter` 経由に変更。
+
+### Tests
+- 5 件追加 (matcher.test.mjs): effectiveFilter の non-empty / empty string / whitespace / null/undefined/非文字列 / surrounding whitespace trim。
+
 ## [0.4.2] — 2026-05-01
 
 ### Added

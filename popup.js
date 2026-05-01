@@ -1,4 +1,4 @@
-import { matchesFilter, DEFAULT_FILTER } from "./matcher.js";
+import { matchesFilter, DEFAULT_FILTER, effectiveFilter } from "./matcher.js";
 import { UNDO_TTL_MS, FILTER_MAX_LENGTH, LOG_PREFIX } from "./constants.js";
 
 const $ = (id) => document.getElementById(id);
@@ -170,10 +170,10 @@ function showConfirm({ groupCount, tabCount }) {
 }
 
 async function bulkCleanup() {
-  const filter = $("filter").value.trim();
-  if (!filter) {
-    setMsg("フィルタが空です", "err");
-    return;
+  const raw = $("filter").value.trim();
+  const filter = effectiveFilter(raw);
+  if (raw === "") {
+    $("filter").value = filter;
   }
   const cleanupBtn = $("cleanup");
   const groupCount = parseInt(cleanupBtn.dataset.matchCount || "0", 10);
@@ -401,7 +401,7 @@ window.addEventListener("unhandledrejection", (ev) => {
 
   try {
     const stored = await chrome.storage.local.get(["filter", "autoEnabled"]);
-    $("filter").value = (stored.filter ?? DEFAULT_FILTER).slice(0, FILTER_MAX_LENGTH);
+    $("filter").value = effectiveFilter(stored.filter).slice(0, FILTER_MAX_LENGTH);
     $("auto-toggle").checked = stored.autoEnabled !== false;
   } catch (e) {
     showError("storage.get", e);
@@ -445,9 +445,8 @@ window.addEventListener("unhandledrejection", (ev) => {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        await chrome.storage.local.set({
-          filter: $("filter").value.trim().slice(0, FILTER_MAX_LENGTH),
-        });
+        const v = $("filter").value.trim().slice(0, FILTER_MAX_LENGTH);
+        await chrome.storage.local.set({ filter: v });
       } catch (e) {
         showError("storage.set", e);
       }

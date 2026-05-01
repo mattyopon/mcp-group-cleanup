@@ -1,5 +1,11 @@
 export const DEFAULT_FILTER = "Claude";
 
+export function effectiveFilter(stored) {
+  if (typeof stored !== "string") return DEFAULT_FILTER;
+  const trimmed = stored.trim();
+  return trimmed.length > 0 ? trimmed : DEFAULT_FILTER;
+}
+
 export function parseFilter(input) {
   const result = { include: [], exclude: [] };
   if (input == null) return result;

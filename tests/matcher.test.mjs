@@ -173,6 +173,32 @@ t("planCleanup respects exclude tokens", () => {
   );
 });
 
+// === effectiveFilter ===
+t("effectiveFilter returns stored value when non-empty", () => {
+  assert.equal(effectiveFilter("MCP"), "MCP");
+  assert.equal(effectiveFilter("Claude !Pinned"), "Claude !Pinned");
+});
+
+t("effectiveFilter falls back to DEFAULT_FILTER on empty string", () => {
+  assert.equal(effectiveFilter(""), DEFAULT_FILTER);
+});
+
+t("effectiveFilter falls back to DEFAULT_FILTER on whitespace only", () => {
+  assert.equal(effectiveFilter("   "), DEFAULT_FILTER);
+  assert.equal(effectiveFilter("\t\n"), DEFAULT_FILTER);
+});
+
+t("effectiveFilter falls back to DEFAULT_FILTER on null/undefined/non-string", () => {
+  assert.equal(effectiveFilter(null), DEFAULT_FILTER);
+  assert.equal(effectiveFilter(undefined), DEFAULT_FILTER);
+  assert.equal(effectiveFilter(42), DEFAULT_FILTER);
+  assert.equal(effectiveFilter({}), DEFAULT_FILTER);
+});
+
+t("effectiveFilter trims surrounding whitespace", () => {
+  assert.equal(effectiveFilter("  Claude  "), "Claude");
+});
+
 console.log(log.join("\n"));
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
